@@ -1,0 +1,8 @@
+language: java
+
+jdk: oraclejdk11
+
+install: sudo apt-get install texlive-full
+
+notifications:
+  email: false
