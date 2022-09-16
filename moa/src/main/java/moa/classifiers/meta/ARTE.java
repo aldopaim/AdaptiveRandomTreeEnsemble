@@ -24,7 +24,6 @@ import moa.classifiers.trees.ARTEHoeffdingTree;
 import moa.core.DoubleVector;
 import moa.core.Measurement;
 import moa.core.MiscUtils;
-import moa.core.Utils;
 import moa.options.ClassOption;
 
 /**
@@ -102,24 +101,15 @@ CapabilitiesHandler {
             initEnsemble(testInstance);
         DoubleVector combinedVote = new DoubleVector();
         boolean shouldClassifierVote = true;
-        double accWindowLearner = 0.0;
         
         for(int i = 0 ; i < this.ensemble.length ; ++i) {
             DoubleVector vote = new DoubleVector(this.ensemble[i].getVotesForInstance(testInstance));
             shouldClassifierVote = (this.ensemble[i].accuracyWindowLearner >= avgAccuracyWindowLearner);
-
-            //updates statistics selection classifier
-            this.ensemble[i].updateMatrixConfusion(instance, vote.getArrayRef());
-            accWindowLearner += this.ensemble[i].accuracyWindowLearner;
-                
+            
             if (vote.sumOfValues() > 0.0  && shouldClassifierVote) { 
                 vote.normalize();
                 combinedVote.addValues(vote);
             }
-        }
-        
-        if (accWindowLearner > 0.0) {
-        	avgAccuracyWindowLearner = (accWindowLearner / this.ensemble.length);
         }
         return combinedVote.getArrayRef();
 	}
@@ -152,6 +142,8 @@ CapabilitiesHandler {
         if(this.ensemble == null) 
             initEnsemble(instance);
         
+        double accWindowLearner = 0.0;
+        
         Collection<TrainingRunnable> trainers = new ArrayList<TrainingRunnable>();   
         for (int i = 0 ; i < this.ensemble.length ; i++) {
             long seed = Double.toString(instancesSeen).hashCode()+i;
@@ -168,6 +160,11 @@ CapabilitiesHandler {
                     this.ensemble[i].trainOnInstance(instance, k, this.instancesSeen);
                 }
             }
+            accWindowLearner += this.ensemble[i].accuracyWindowLearner;
+        }
+        
+        if (accWindowLearner > 0.0) {
+         	avgAccuracyWindowLearner = (accWindowLearner / this.ensemble.length);
         }
         
           
@@ -178,7 +175,6 @@ CapabilitiesHandler {
                 throw new RuntimeException("Could not call invokeAll() on training threads.");
             }
         }
-        
 	}
 	
 	
@@ -344,9 +340,9 @@ CapabilitiesHandler {
             weightedInstance.setWeight(instance.weight() * weight);
             this.classifier.trainOnInstance(weightedInstance);
             
+            boolean correctlyClassifies = this.classifier.correctlyClassifies(instance);
             // Should it use a drift detector?  
             if(this.useDriftDetector ) {
-                boolean correctlyClassifies = this.classifier.correctlyClassifies(instance);
                 // Update the DRIFT detection method
                 this.driftDetectionMethod.input(correctlyClassifies ? 0 : 1);
                 // Check if there was a change
@@ -356,12 +352,12 @@ CapabilitiesHandler {
                     this.reset();                    
                 }
             }
+            
+            this.updateMatrixConfusion(correctlyClassifies);
         }
 
-        private void updateMatrixConfusion(Instance instance, double[] vote) {
-        	int trueClass = (int) instance.classValue();
-            int predictedClass = Utils.maxIndex(vote);
-            double acc = 0.0;
+        private void updateMatrixConfusion(boolean correctlyClassifies) {
+        	double acc = 0.0;
             
             if (accClassifierArray == null) {
             	accClassifierArray = new int[this.windowObservationSize+2];
@@ -380,7 +376,7 @@ CapabilitiesHandler {
             lastIndex++;
             accClassifierArray[accClassifierArray.length-1] -= 
             		accClassifierArray[lastIndex];
-            accClassifierArray[lastIndex] = trueClass == predictedClass ? 1 : 0;
+            accClassifierArray[lastIndex] = correctlyClassifies ? 1 : 0;
             
             
             accClassifierArray[accClassifierArray.length-1] += 
