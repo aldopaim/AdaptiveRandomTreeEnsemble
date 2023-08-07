@@ -179,9 +179,24 @@ CapabilitiesHandler {
 	
 	
 	@Override
-	protected Measurement[] getModelMeasurementsImpl() {
-		return null;
-	}
+	 protected Measurement[] getModelMeasurementsImpl() {
+		 cleanThreads();
+		 return null;
+	 }
+
+	 @Override
+	 public Measurement[] getModelMeasurements() {
+		 Measurement[] measurements = super.getModelMeasurements();
+		 cleanThreads();
+		 return measurements;
+	 }
+
+	 public void cleanThreads() {
+		 if(this.executor != null) {
+			 this.executor.shutdownNow();
+			 this.executor = null;
+		 }
+	 }
 
 	@Override
 	public void getModelDescription(StringBuilder out, int indent) {
