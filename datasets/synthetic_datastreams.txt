@@ -14,6 +14,9 @@ The following are all the configurations of the synthetic data streams used in t
 #AGR_g
 -i 1000000 -f 1000000 -s (ConceptDriftStream -s (generators.AgrawalGenerator -f 1) -d (ConceptDriftStream -s (generators.AgrawalGenerator -f 2) -d (ConceptDriftStream -s (generators.AgrawalGenerator )   -d (generators.AgrawalGenerator -f 4) -w 50000 -p 250000 ) -w 50000 -p 250000 ) -w 50000 -p 250000) 
 
+#AssetNegotiation
+-i 1000000 -f 1000000 -s generators.AssetNegotiationGenerator
+
 #HYPER
 -i 1000000 -f 1000000 -s (generators.HyperplaneGenerator  -k 10 -t .001) 
 
@@ -23,11 +26,11 @@ The following are all the configurations of the synthetic data streams used in t
 #LED_g
 -i 1000000 -f 1000000 -s (ConceptDriftStream -s (generators.LEDGeneratorDrift -d 1)   -d (ConceptDriftStream -s (generators.LEDGeneratorDrift -d 3) -d (ConceptDriftStream -s (generators.LEDGeneratorDrift -d 5)  -d (generators.LEDGeneratorDrift -d 7) -w 50000 -p 250000 ) -w 50000 -p 250000 ) -w 50000 -p 250000) 
 
-#MIXED_BALANCED - abrupt 
--i 1000000 -f 1000000 -s (ConceptDriftStream -s (generators.MixedGenerator -b) -d (ConceptDriftStream -s (generators.MixedGenerator -f 2 -b) -d (ConceptDriftStream -s (generators.MixedGenerator -b) -d (generators.MixedGenerator -f 2 -b) -p 250000 -w 50) -p 250000 -w 50) -p 250000 -w 50) 
+#MIXED - no drift
+-i 1000000 -f 1000000 -s generators.MixedGenerator
 
-#MIXED_IMBALANCED - Abrupt
--i 1000000 -f 1000000 -s (ConceptDriftStream -s generators.MixedGenerator -d (ConceptDriftStream -s (generators.MixedGenerator -f 2) -d (ConceptDriftStream -s generators.MixedGenerator -d (generators.MixedGenerator -f 2) -p 250000 -w 50) -p 250000 -w 50) -p 250000 -w 50) 
+MIXED_g_imb
+-i 1000000 -f 1000000 -s (ConceptDriftStream -s (ImbalancedStream -s generators.MixedGenerator) -d (ConceptDriftStream -s (ImbalancedStream -s generators.MixedGenerator) -d (ConceptDriftStream -s (ImbalancedStream -s generators.MixedGenerator) -d (ImbalancedStream -s (generators.MixedGenerator -f 2)) -p 250000 -w 50000) -p 250000 -w 50000) -p 250000 -w 50000)
 
 #RBF_m
 -i 1000000 -f 1000000 -s (generators.RandomRBFGeneratorDrift -c 5 -s .0001) 
@@ -55,3 +58,12 @@ The following are all the configurations of the synthetic data streams used in t
 
 #WAVEFORM_g 
 -i 1000000 -f 1000000 -s (ConceptDriftStream -s (generators.WaveformGeneratorDrift -n) -d (ConceptDriftStream -s (generators.WaveformGeneratorDrift -i 2 -n) -d (ConceptDriftStream -s (generators.WaveformGeneratorDrift -i 3 -n) -d (generators.WaveformGeneratorDrift -i 4 -n) -p 250000 -w 50000) -p 250000 -w 50000) -p 250000 -w 50000) 
+
+
+#WAVEFORM_imb - no drift
+-i 1000000 -f 1000000 -s (ImbalancedStream -s generators.WaveformGenerator -c 0.65;0.25;0.1)
+
+
+#WAVEFORM_g_imb
+-i 1000000 -f 1000000 -s (ConceptDriftStream -s (ImbalancedStream -s generators.WaveformGeneratorDrift -c 0.65;0.25;0.1) -d (ConceptDriftStream -s (ImbalancedStream -s (generators.WaveformGeneratorDrift -i 2) -c 0.65;0.25;0.1) -d (ConceptDriftStream -s (ImbalancedStream -s (generators.WaveformGeneratorDrift -i 3) -c 0.65;0.25;0.1) -d (ImbalancedStream -s (generators.WaveformGeneratorDrift -i 4) -c 0.65;0.25;0.1) -p 250000 -w 50000) -p 250000 -w 50000) -p 250000 -w 50000)
+
