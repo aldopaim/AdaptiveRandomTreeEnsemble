@@ -68,10 +68,11 @@ CapabilitiesHandler {
         "Should use drift detection? If disabled then bkg learner is also disabled");
 
     public IntOption windowObservationSize  = new IntOption("windowObservationSize", 'w',
-            "Size of the observation window to refine statistics and select learners in the voting.", 400, 0, Integer.MAX_VALUE);
+            "Size of the observation window to refine statistics and select learners in the voting.", 500, 0, Integer.MAX_VALUE);
         
-    
-       
+	public IntOption seedRandom  = new IntOption("seedRandom", 'e',
+            "Random seed used in the random subspace size and random cut-point.", 1, 0, Integer.MAX_VALUE);
+		   
     protected static final int SINGLE_THREAD = 0;
     
     protected ARTEBaseLearner[] ensemble;
@@ -87,8 +88,7 @@ CapabilitiesHandler {
     //statistic window size
     protected double avgAccuracyWindowLearner;
     protected int numAttributes;
-    
-    
+        
 	@Override
 	public boolean isRandomizable() {
 		return true;
@@ -100,16 +100,20 @@ CapabilitiesHandler {
         if(this.ensemble == null) 
             initEnsemble(testInstance);
         DoubleVector combinedVote = new DoubleVector();
-        boolean shouldClassifierVote = true;
+        boolean shouldVote = true;
         
         for(int i = 0 ; i < this.ensemble.length ; ++i) {
-            DoubleVector vote = new DoubleVector(this.ensemble[i].getVotesForInstance(testInstance));
-            shouldClassifierVote = (this.ensemble[i].accuracyWindowLearner >= avgAccuracyWindowLearner);
+        	if (this.windowObservationSize.getValue() > 0 ) 
+        		shouldVote	= (this.ensemble[i].accuracyWindowLearner >= avgAccuracyWindowLearner);
+        	
+        	if (shouldVote) {
+        		DoubleVector vote = new DoubleVector(this.ensemble[i].getVotesForInstance(testInstance));
             
-            if (vote.sumOfValues() > 0.0  && shouldClassifierVote) { 
-                vote.normalize();
-                combinedVote.addValues(vote);
-            }
+	            if (vote.sumOfValues() > 0.0) { 
+	                vote.normalize();
+	                combinedVote.addValues(vote);
+	            }
+        	}
         }
         return combinedVote.getArrayRef();
 	}
@@ -146,8 +150,8 @@ CapabilitiesHandler {
         
         Collection<TrainingRunnable> trainers = new ArrayList<TrainingRunnable>();   
         for (int i = 0 ; i < this.ensemble.length ; i++) {
-            long seed = Double.toString(instancesSeen).hashCode()+i;
-            this.ensemble[i].setSeedRandom(seed);
+            
+        	this.ensemble[i].setSeedRandom(this.seedRandom.getValue());
             
             int k = MiscUtils.poisson(this.lambdaOption.getValue(), this.classifierRandom);
              if (k > 0) {
@@ -211,7 +215,8 @@ CapabilitiesHandler {
         int n = instance.numAttributes()-1; // Ignore class label ( -1 )
         
 		this.subspaceRandom = new Random();
-		this.subspaceRandom.setSeed(n+instance.numClasses());
+		this.subspaceRandom.setSeed(this.seedRandom.getValue());
+		
 		this.minValueRandom = 2; 
 		this.maxValueRandom = n;
 		
@@ -230,6 +235,7 @@ CapabilitiesHandler {
                 driftDetectionMethodOption,
                 this.windowObservationSize.getValue());
         }
+        
     }
 	
 	
@@ -374,6 +380,9 @@ CapabilitiesHandler {
         private void updateMatrixConfusion(boolean correctlyClassifies) {
         	double acc = 0.0;
             
+        	if (this.windowObservationSize <= 0)
+        		return;
+        	
             if (accClassifierArray == null) {
             	accClassifierArray = new int[this.windowObservationSize+2];
             	lastIndex = -1;
