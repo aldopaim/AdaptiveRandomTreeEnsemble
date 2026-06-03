@@ -12,8 +12,8 @@ import com.yahoo.labs.samoa.instances.Instance;
 import moa.classifiers.bayes.NaiveBayes;
 import moa.classifiers.core.AttributeSplitSuggestion;
 import moa.classifiers.core.attributeclassobservers.ARTEAttributeClassObserver;
+import moa.classifiers.core.attributeclassobservers.ARTENominalAttributeClassObserver;
 import moa.classifiers.core.attributeclassobservers.AttributeClassObserver;
-import moa.classifiers.core.conditionaltests.NominalAttributeMultiwayTest;
 import moa.classifiers.core.splitcriteria.SplitCriterion;
 import moa.core.Utils;
 
@@ -38,8 +38,6 @@ public class ARTEHoeffdingTree extends HoeffdingTree {
 	public IntOption subspaceSizeOption = new IntOption("subspaceSizeSize", 'k',
             "Number of features per subset for each node split. Negative values = #features - k", 
             2, Integer.MIN_VALUE, Integer.MAX_VALUE);
-    
-    
     
     @Override
     public String getPurposeString() {
@@ -97,8 +95,14 @@ public class ARTEHoeffdingTree extends HoeffdingTree {
                 AttributeClassObserver obs = this.attributeObservers.get(i);
                 if (obs == null) {
                     
-                	if (inst.attribute(instAttIndex).isNominal())
+                	if (inst.attribute(instAttIndex).isNominal()) {
                 		obs = ht.newNominalClassObserver();
+                		
+                		ARTENominalAttributeClassObserver aetg = (ARTENominalAttributeClassObserver)obs;
+                		if (aetg.getRand() == null) {
+                            aetg.setRand(ht.classifierRandom);
+                		}
+                	}
                 	else {
                 		obs = ht.newNumericClassObserver();
                 		
@@ -330,11 +334,6 @@ public class ARTEHoeffdingTree extends HoeffdingTree {
                             node.getObservedClassDistribution(),splitDecision.numSplits() );
                     
                     for (int i = 0; i < splitDecision.numSplits(); i++) {
-                    	if (splitDecision.splitTest instanceof NominalAttributeMultiwayTest) {
-                    		if (this.classifierRandom.nextDouble() > 0.5) {
-                        		continue;
-                        	}
-                    	}
                     	
                     	Node newChild = newLearningNode(splitDecision.resultingClassDistributionFromSplit(i));
                     	newSplit.setChild(i, newChild);

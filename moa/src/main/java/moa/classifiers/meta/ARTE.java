@@ -2,7 +2,6 @@ package moa.classifiers.meta;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Random;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -31,425 +30,480 @@ import moa.options.ClassOption;
  *
  *
  * @author Aldo
- * @version $Revision: 1 $
+ * @version $Revision: 2 $
  */
 
 public class ARTE extends AbstractClassifier implements MultiClassClassifier,
 CapabilitiesHandler {
 
 	/**
-	 * 
+	 *
 	 */
 	private static final long serialVersionUID = 1L;
-	
+
 	@Override
-    public String getPurposeString() {
+	public String getPurposeString() {
 		return "Adaptive random tree ensemble for evolving data stream classification from Paim et al.";
-    }
+	}
 
-    public ClassOption treeLearnerOption = new ClassOption("treeLearner", 'l',
-            "ARTEHoeffdingTree", ARTEHoeffdingTree.class,
-            "ARTEHoeffdingTree -e 2000000 -g 100 -c 0.01 -n ARTEAttributeClassObserver");
 
-    public IntOption ensembleSizeOption = new IntOption("ensembleSize", 's',
-        "The number of trees.", 100, 1, Integer.MAX_VALUE);
-    
-    public FloatOption lambdaOption = new FloatOption("lambda", 'a',
-        "The lambda parameter for bagging.", 6.0, 1.0, Float.MAX_VALUE);
+	public ClassOption treeLearnerOption = new ClassOption("treeLearner", 'l',
+			"ARTEHoeffdingTree", ARTEHoeffdingTree.class,
+			"ARTEHoeffdingTree -e 2000000 -g 100 -c 0.01 -n ARTEAttributeClassObserver -d ARTENominalAttributeClassObserver -b");
 
-    public IntOption numberOfJobsOption = new IntOption("numberOfJobs", 'j',
-        "Total number of concurrent jobs used for processing "
-        + "(-1 = as much as possible, 0 = do not use multithreading)", 1, -1, Integer.MAX_VALUE);
-    
-    public ClassOption driftDetectionMethodOption = new ClassOption("driftDetectionMethod", 'x',
-        "Change detector for drifts and its parameters", ChangeDetector.class, "ADWINChangeDetector -a 1.0E-3");
 
-    public FlagOption disableDriftDetectionOption = new FlagOption("disableDriftDetection", 'u',
-        "Should use drift detection? If disabled then bkg learner is also disabled");
+	public IntOption ensembleSizeOption = new IntOption("ensembleSize", 's',
+			"The number of trees.", 100, 1, Integer.MAX_VALUE);
 
-    public IntOption windowObservationSize  = new IntOption("windowObservationSize", 'w',
-            "Size of the observation window to refine statistics and select learners in the voting.", 500, 0, Integer.MAX_VALUE);
-        
-	public IntOption seedRandom  = new IntOption("seedRandom", 'e',
-            "Random seed used in the random subspace size and random cut-point.", 1, 0, Integer.MAX_VALUE);
-		   
-    protected static final int SINGLE_THREAD = 0;
-    
-    protected ARTEBaseLearner[] ensemble;
-    protected long instancesSeen;
+	public FloatOption lambdaOption = new FloatOption("lambda", 'a',
+			"The lambda parameter for bagging.", 6.0, 1.0, Float.MAX_VALUE);
 
-    transient private ExecutorService executor;
-    
-    //subspace
-    protected Random subspaceRandom;
-    protected int  maxValueRandom;
-    protected int  minValueRandom;
-    
-    //statistic window size
-    protected double avgAccuracyWindowLearner;
-    protected int numAttributes;
-        
+	public IntOption numberOfJobsOption = new IntOption("numberOfJobs", 'j',
+			"Total number of concurrent jobs used for processing "
+					+ "(-1 = as much as possible, 0 = do not use multithreading)", 1, -1, Integer.MAX_VALUE);
+
+	public ClassOption driftDetectionMethodOption = new ClassOption("driftDetectionMethod", 'x',
+			"Change detector for drifts and its parameters", ChangeDetector.class, "ADWINChangeDetector -a 1.0E-3");
+
+	public FlagOption disableDriftDetectionOption = new FlagOption("disableDriftDetection", 'u',
+			"Should use drift detection? If disabled then bkg learner is also disabled");
+
+	public IntOption windowObservationSize  = new IntOption("windowObservationSize", 'w',
+			"Size of the observation window to refine statistics and select learners in the voting.", 500, 0, Integer.MAX_VALUE);
+
+	public IntOption seedRandom  = new IntOption("seedRandom", 'r',
+			"The random seed.", 1, 0, Integer.MAX_VALUE);
+
+
+	protected static final int SINGLE_THREAD = 0;
+
+	protected ARTEBaseLearner[] ensemble;
+	protected long instancesSeen;
+
+	transient private ExecutorService executor;
+
+	//subspace
+	protected int  maxValueRandom;
+	protected int  minValueRandom;
+
+	//statistic window size
+	protected double avgAccuracyWindowLearner;
+	protected int numAttributes;
+
+	protected int  numLearner;
+
+	protected TreeState[] treeStates; // Estado de rejeições para cada árvore
+	protected int rejectionWindowSize;
+	protected int limitRejectionWindow;
+
+
+
+	protected class TreeState {
+		public int rejectionCount; 
+		public int windowPosition; 
+		public int[] rejectionWindow; 
+
+		public TreeState(int windowSize) {
+			this.rejectionCount = 0;
+			this.windowPosition = 0;
+			this.rejectionWindow = new int[windowSize];
+		}
+
+
+		public void update(boolean isRejected) {
+			rejectionCount -= rejectionWindow[windowPosition];
+			rejectionWindow[windowPosition] = isRejected ? 1 : 0;
+			rejectionCount += rejectionWindow[windowPosition];
+			windowPosition = (windowPosition + 1) % rejectionWindowSize;
+		}
+
+
+		public boolean shouldReset() {
+			return rejectionCount >= limitRejectionWindow;
+		}
+	}
+
 	@Override
 	public boolean isRandomizable() {
 		return true;
 	}
-	
+
 	@Override
 	public double[] getVotesForInstance(Instance instance) {
 		Instance testInstance = instance.copy();
-        if(this.ensemble == null) 
-            initEnsemble(testInstance);
-        DoubleVector combinedVote = new DoubleVector();
-        boolean shouldVote = true;
-        
-        for(int i = 0 ; i < this.ensemble.length ; ++i) {
-        	if (this.windowObservationSize.getValue() > 0 ) 
-        		shouldVote	= (this.ensemble[i].accuracyWindowLearner >= avgAccuracyWindowLearner);
-        	
-        	if (shouldVote) {
-        		DoubleVector vote = new DoubleVector(this.ensemble[i].getVotesForInstance(testInstance));
-            
-	            if (vote.sumOfValues() > 0.0) { 
-	                vote.normalize();
-	                combinedVote.addValues(vote);
-	            }
-        	}
-        }
-        return combinedVote.getArrayRef();
-	}
-	
-	
-	@Override
-	public void resetLearningImpl() {
-		// Reset attributes
-        this.ensemble = null;
-        this.instancesSeen = 0;
-        this.avgAccuracyWindowLearner = 0;
-        
-        // Multi-threading (code inspired by AdaptiveRandomForest)
-        int numberOfJobs;
-        if(this.numberOfJobsOption.getValue() == -1) 
-            numberOfJobs = Runtime.getRuntime().availableProcessors();
-        else 
-            numberOfJobs = this.numberOfJobsOption.getValue();
-        // SINGLE_THREAD and requesting for only 1 thread are equivalent. 
-        // this.executor will be null and not used...
-        if(numberOfJobs != ARTE.SINGLE_THREAD && numberOfJobs != 1)
-            this.executor = Executors.newFixedThreadPool(numberOfJobs);
-		
+		if(this.ensemble == null)
+			initEnsemble(testInstance);
+		DoubleVector combinedVote = new DoubleVector();
+		boolean shouldVote = true;
+
+
+		for(int i = 0 ; i < this.ensemble.length ; ++i) {
+			if (this.windowObservationSize.getValue() > 0 )
+				shouldVote = (this.ensemble[i].accuracyWindowLearner >= avgAccuracyWindowLearner);
+
+			if (shouldVote) {
+				treeStates[i].update(false); 
+
+				DoubleVector vote = new DoubleVector(this.ensemble[i].getVotesForInstance(testInstance));
+
+				if (vote.sumOfValues() > 0.0) {
+					vote.normalize();
+					combinedVote.addValues(vote);
+					this.numLearner++;
+				}
+			}
+			else {
+				treeStates[i].update(true);                 
+				if (treeStates[i].shouldReset()) {
+					this.ensemble[i].reset();
+					treeStates[i] = new TreeState(rejectionWindowSize);
+				}
+			}
+
+		}
+		return combinedVote.getArrayRef();
 	}
 
-	
+
+	@Override
+	public void resetLearningImpl() {
+		this.ensemble = null;
+		this.instancesSeen = 0;
+		this.avgAccuracyWindowLearner = 0;
+
+		// Multi-threading (code inspired by AdaptiveRandomForest)
+		int numberOfJobs;
+		if(this.numberOfJobsOption.getValue() == -1)
+			numberOfJobs = Runtime.getRuntime().availableProcessors();
+		else
+			numberOfJobs = this.numberOfJobsOption.getValue();
+
+		if(numberOfJobs != ARTE.SINGLE_THREAD && numberOfJobs != 1)
+			this.executor = Executors.newFixedThreadPool(numberOfJobs);
+
+	}
+
+
 	@Override
 	public void trainOnInstanceImpl(Instance instance) {
 		++this.instancesSeen;
-        if(this.ensemble == null) 
-            initEnsemble(instance);
-        
-        double accWindowLearner = 0.0;
-        
-        Collection<TrainingRunnable> trainers = new ArrayList<TrainingRunnable>();   
-        for (int i = 0 ; i < this.ensemble.length ; i++) {
-            
-        	this.ensemble[i].setSeedRandom(this.seedRandom.getValue());
-            
-            int k = MiscUtils.poisson(this.lambdaOption.getValue(), this.classifierRandom);
-             if (k > 0) {
-            	if(this.executor != null) {
-                    TrainingRunnable trainer = new TrainingRunnable(this.ensemble[i], 
-                        instance, k, this.instancesSeen);
-                    trainers.add(trainer);
-                }
-                else { // SINGLE_THREAD 
-                    this.ensemble[i].trainOnInstance(instance, k, this.instancesSeen);
-                }
-            }
-            accWindowLearner += this.ensemble[i].accuracyWindowLearner;
-        }
-        
-        if (accWindowLearner > 0.0) {
-         	avgAccuracyWindowLearner = (accWindowLearner / this.ensemble.length);
-        }
-        
-          
-        if(this.executor != null) {
-            try {
-            	this.executor.invokeAll(trainers);
-            } catch (InterruptedException ex) {
-                throw new RuntimeException("Could not call invokeAll() on training threads.");
-            }
-        }
+		if(this.ensemble == null)
+			initEnsemble(instance);
+
+		// MULTITHREAD
+		if (this.executor != null) {
+			Collection<TrainingRunnable> trainers = new ArrayList<TrainingRunnable>();  
+			for (int i = 0; i < this.ensemble.length; i++) {
+				int k = MiscUtils.poisson(this.lambdaOption.getValue(), this.classifierRandom);
+				if (k > 0) {
+					TrainingRunnable trainer = new TrainingRunnable(this.ensemble[i],
+							instance, k, this.instancesSeen);
+					trainers.add(trainer);
+				}
+			}
+
+			if (!trainers.isEmpty()) {
+				try {
+					this.executor.invokeAll(trainers);
+				} catch (InterruptedException ex) {
+					throw new RuntimeException("Could not call invokeAll() on training threads.");
+				}
+			}
+
+			double accWindowLearner = 0.0;
+			for (int i = 0; i < this.ensemble.length; i++) {
+				accWindowLearner += this.ensemble[i].accuracyWindowLearner;
+			}
+
+			if (accWindowLearner > 0.0) {
+				avgAccuracyWindowLearner = (accWindowLearner / this.ensemble.length);
+			}
+		} else {
+			// SINGLE_THREAD
+			double accWindowLearner = 0.0;
+			for (int i = 0; i < this.ensemble.length; i++) {
+				int k = MiscUtils.poisson(this.lambdaOption.getValue(), this.classifierRandom);
+				if (k > 0) {
+					this.ensemble[i].trainOnInstance(instance, k, this.instancesSeen);
+				}
+				accWindowLearner += this.ensemble[i].accuracyWindowLearner;
+			}
+
+			if (accWindowLearner > 0.0) {
+				avgAccuracyWindowLearner = (accWindowLearner / this.ensemble.length);
+			}
+		}
 	}
-	
-	
+
+
 	@Override
-	 protected Measurement[] getModelMeasurementsImpl() {
-		 cleanThreads();
-		 return null;
-	 }
+	protected Measurement[] getModelMeasurementsImpl() {
+		cleanThreads();
+		return null;
+	}
 
-	 @Override
-	 public Measurement[] getModelMeasurements() {
-		 Measurement[] measurements = super.getModelMeasurements();
-		 cleanThreads();
-		 return measurements;
-	 }
+	@Override
+	public Measurement[] getModelMeasurements() {
+		Measurement[] measurements = super.getModelMeasurements();
+		cleanThreads();
+		return measurements;
+	}
 
-	 public void cleanThreads() {
-		 if(this.executor != null) {
-			 this.executor.shutdownNow();
-			 this.executor = null;
-		 }
-	 }
+	public void cleanThreads() {
+		if(this.executor != null) {
+			this.executor.shutdownNow();
+			this.executor = null;
+		}
+	}
 
 	@Override
 	public void getModelDescription(StringBuilder out, int indent) {
-		
+
 	}
-	
+
 	protected void initEnsemble(Instance instance) {
-        // Init the ensemble.
-        int ensembleSize = this.ensembleSizeOption.getValue();
-        this.ensemble = new ARTEBaseLearner[ensembleSize];
-        
-        int n = instance.numAttributes()-1; // Ignore class label ( -1 )
-        
-		this.subspaceRandom = new Random();
-		this.subspaceRandom.setSeed(this.seedRandom.getValue());
-		
-		this.minValueRandom = 2; 
+		// Init the ensemble.
+		this.numLearner = 0;
+
+		int ensembleSize = this.ensembleSizeOption.getValue();
+		this.ensemble = new ARTEBaseLearner[ensembleSize];
+
+		this.treeStates = new TreeState[ensembleSize];
+
+		int n = instance.numAttributes()-1; // Ignore class label ( -1 )
+
+
+		this.minValueRandom = 2;
 		this.maxValueRandom = n;
-		
+
 		ARTEHoeffdingTree treeLearner = (ARTEHoeffdingTree) getPreparedClassOption(this.treeLearnerOption);
-        treeLearner.resetLearning();
-        
-        for(int i = 0 ; i < ensembleSize ; ++i) {
-        	
-        	treeLearner.subspaceSizeOption.setValue(randomSubSpaceSize());
-        	
-            this.ensemble[i] = new ARTEBaseLearner(
-                i, 
-                (ARTEHoeffdingTree) treeLearner.copy(), 
-                this.instancesSeen, 
-                ! this.disableDriftDetectionOption.isSet(), 
-                driftDetectionMethodOption,
-                this.windowObservationSize.getValue());
-        }
-        
-    }
-	
-	
+		treeLearner.setRandomSeed(this.seedRandom.getValue());
+		treeLearner.resetLearning();
+
+		this.rejectionWindowSize = this.windowObservationSize.getValue() * 2;
+		this.limitRejectionWindow = this.rejectionWindowSize - (int)(this.rejectionWindowSize * 0.1);
+
+		for(int i = 0 ; i < ensembleSize ; ++i) {
+
+			this.treeStates[i] = new TreeState(rejectionWindowSize);
+
+			treeLearner.subspaceSizeOption.setValue(randomSubSpaceSize());
+
+			this.ensemble[i] = new ARTEBaseLearner(
+					i,
+					(ARTEHoeffdingTree) treeLearner.copy(),
+					this.instancesSeen,
+					! this.disableDriftDetectionOption.isSet(),
+					driftDetectionMethodOption,
+					this.windowObservationSize.getValue()
+					);
+		}
+
+
+	}
+
+
 	private int randomSubSpaceSize() {
-		
-		int randomSubSpaceSize = this.subspaceRandom.nextInt(maxValueRandom + 1 - minValueRandom) + minValueRandom;
+		int randomSubSpaceSize = this.classifierRandom.nextInt(maxValueRandom + 1 - minValueRandom) + minValueRandom;
 		return randomSubSpaceSize;
 	}
 
 	@Override
-    public ImmutableCapabilities defineImmutableCapabilities() {
-        if (this.getClass() == ARTE.class)
-            return new ImmutableCapabilities(Capability.VIEW_STANDARD, Capability.VIEW_LITE);
-        else
-            return new ImmutableCapabilities(Capability.VIEW_STANDARD);
-    }
+	public ImmutableCapabilities defineImmutableCapabilities() {
+		if (this.getClass() == ARTE.class)
+			return new ImmutableCapabilities(Capability.VIEW_STANDARD, Capability.VIEW_LITE);
+		else
+			return new ImmutableCapabilities(Capability.VIEW_STANDARD);
+	}
 
-    @Override
-    public Classifier[] getSublearners() {
-        /* Extracts the reference to the ARTEHoeffdingTree object from within the ensemble of ARTEBaseLearner's */
-        Classifier[] forest = new Classifier[this.ensemble.length];
-        for(int i = 0 ; i < forest.length ; ++i)
-            forest[i] = this.ensemble[i].classifier;
-        return forest;
 
-    }
+	@Override
+	public Classifier[] getSublearners() {
+		//Extracts the reference to the ARTEHoeffdingTree object from within the ensemble of ARTEBaseLearner's 
+		Classifier[] forest = new Classifier[this.ensemble.length];
+		for(int i = 0 ; i < forest.length ; ++i)
+			forest[i] = this.ensemble[i].classifier;
+		return forest;
+	}
+
+
 	
-	
-	/**
-     * Inner class that represents a single tree member of the forest. 
-     * It contains some analysis information, such as the numberOfDriftsDetected, 
-     */
-    protected final class ARTEBaseLearner extends AbstractMOAObject {
-        /**
-		 * 
+
+	protected final class ARTEBaseLearner extends AbstractMOAObject {
+		/**
+		 *
 		 */
 		private static final long serialVersionUID = 1L;
 		public int indexOriginal;
-        public long createdOn;
-        public long lastDriftOn;
-        public ARTEHoeffdingTree classifier;
-        
-        // The drift object parameters. 
-        protected ClassOption driftOption;
-        
-        // Drift detection
-        protected ChangeDetector driftDetectionMethod;
-        
-        public boolean useDriftDetector;
-        
-        // Statistics
-        protected int numberOfDriftsDetected;
-        public long instancesLog;
-        
-        //
-        protected int windowObservationSize;
-        protected double accuracyWindowLearner; 
-        protected Random subspaceRandomBaseLearner;
-        
-        protected int[] accClassifierArray; 
-        protected int lastIndex;
-        
-        private void init(int indexOriginal, 
-        		ARTEHoeffdingTree instantiatedClassifier, 
-	            long instancesSeen, 
-	            boolean useDriftDetector, 
-	            ClassOption driftOption, 
-	            int windowObservationSize) {
-        	
-            this.indexOriginal = indexOriginal;
-            this.createdOn = instancesSeen;
-            this.lastDriftOn = 0;
-            
-            this.classifier = instantiatedClassifier;
-            this.useDriftDetector = useDriftDetector;
-            
-            this.numberOfDriftsDetected = 0;
-            this.windowObservationSize = windowObservationSize;
-            this.instancesLog = 0;
+		public ARTEHoeffdingTree classifier;
 
-            if(this.useDriftDetector) {
-                this.driftOption = driftOption;
-                this.driftDetectionMethod = ((ChangeDetector) getPreparedClassOption(this.driftOption)).copy();
-            }
+		// The drift object parameters.
+		protected ClassOption driftOption;
 
-        }
+		// Drift detection
+		protected ChangeDetector driftDetectionMethod;
 
-        public ARTEBaseLearner(int indexOriginal, 
-        		ARTEHoeffdingTree instantiatedClassifier, 
-        		    long instancesSeen, 
-                    boolean useDriftDetector, 
-                    ClassOption driftOption, 
-                    int windowObservationSize) {
-            init(indexOriginal, 
-            		instantiatedClassifier, 
-            		instancesSeen, 
-            		useDriftDetector, 
-            		driftOption, 
-            		windowObservationSize);
-        }
+		public boolean useDriftDetector;
 
-        public void reset() {
-        	this.classifier.resetLearning();
-        	this.createdOn = instancesSeen;
-        	this.driftDetectionMethod = ((ChangeDetector) getPreparedClassOption(this.driftOption)).copy();
-            accClassifierArray = null;
-            this.classifier.subspaceSizeOption.setValue(randomSubSpaceSizeLocal());
-        }
+		// Statistics
+		protected int numberOfDriftsDetected;
 
-        public void setSeedRandom(long seed) {
-        	if (this.subspaceRandomBaseLearner == null)
-        		this.subspaceRandomBaseLearner = new Random();
-    		this.subspaceRandomBaseLearner.setSeed(seed);
-        }
-        
-        private int randomSubSpaceSizeLocal() {
-    		int randomSubSpaceSize = this.subspaceRandomBaseLearner.nextInt(maxValueRandom + 1 - minValueRandom) + minValueRandom;
-    		return randomSubSpaceSize;
-    	}
-        
-        public void trainOnInstance(Instance instance, double weight, long instancesSeen) {
-            Instance weightedInstance = instance.copy();
-            weightedInstance.setWeight(instance.weight() * weight);
-            this.classifier.trainOnInstance(weightedInstance);
-            
-            boolean correctlyClassifies = this.classifier.correctlyClassifies(instance);
-            // Should it use a drift detector?  
-            if(this.useDriftDetector ) {
-                // Update the DRIFT detection method
-                this.driftDetectionMethod.input(correctlyClassifies ? 0 : 1);
-                // Check if there was a change
-                if(this.driftDetectionMethod.getChange()) {
-                	this.lastDriftOn = instancesSeen;
-                    this.numberOfDriftsDetected++;
-                    this.reset();                    
-                }
-            }
-            
-            this.updateMatrixConfusion(correctlyClassifies);
-        }
+		//
+		protected int windowObservationSize;
+		protected double accuracyWindowLearner;
 
-        private void updateMatrixConfusion(boolean correctlyClassifies) {
-        	double acc = 0.0;
-            
-        	if (this.windowObservationSize <= 0)
-        		return;
-        	
-            if (accClassifierArray == null) {
-            	accClassifierArray = new int[this.windowObservationSize+2];
-            	lastIndex = -1;
-            }
-            
-            if (lastIndex == this.windowObservationSize-1) {
-            	lastIndex = -1;
-            	
-            }
-            	
-            if (accClassifierArray[accClassifierArray.length-2] < this.windowObservationSize) {
-            	accClassifierArray[accClassifierArray.length-2] ++;
-            }
-            
-            lastIndex++;
-            accClassifierArray[accClassifierArray.length-1] -= 
-            		accClassifierArray[lastIndex];
-            accClassifierArray[lastIndex] = correctlyClassifies ? 1 : 0;
-            
-            
-            accClassifierArray[accClassifierArray.length-1] += 
-            		accClassifierArray[lastIndex];
-            
-            acc = (double) accClassifierArray[accClassifierArray.length-1]/accClassifierArray[accClassifierArray.length-2];
-            accuracyWindowLearner = acc;
-			
+		//protected int[] accClassifierArray;
+		protected boolean[] accWindow;
+		protected int accSum; // Soma das classificações corretas
+		protected int accCount; // Número de instâncias na janela
+		protected int lastIndex;
+
+
+		private void init(int indexOriginal,
+				ARTEHoeffdingTree instantiatedClassifier,
+				long instancesSeen,
+				boolean useDriftDetector,
+				ClassOption driftOption,
+				int windowObservationSize
+				) {
+
+			this.indexOriginal = indexOriginal;
+		
+			this.classifier = instantiatedClassifier;
+			this.useDriftDetector = useDriftDetector;
+
+			this.numberOfDriftsDetected = 0;
+			this.windowObservationSize = windowObservationSize;
+
+			if(this.useDriftDetector) {
+				this.driftOption = driftOption;
+				this.driftDetectionMethod = ((ChangeDetector) getPreparedClassOption(this.driftOption)).copy();
+			}
+
 		}
 
+		public ARTEBaseLearner(int indexOriginal,
+				ARTEHoeffdingTree instantiatedClassifier,
+				long instancesSeen,
+				boolean useDriftDetector,
+				ClassOption driftOption,
+				int windowObservationSize) {
+			init(indexOriginal,
+					instantiatedClassifier,
+					instancesSeen,
+					useDriftDetector,
+					driftOption,
+					windowObservationSize);
+		}
+
+		public void reset() {
+			this.classifier.resetLearning();
+			this.driftDetectionMethod = ((ChangeDetector) getPreparedClassOption(this.driftOption)).copy();
+			accWindow = null;
+			this.classifier.subspaceSizeOption.setValue(randomSubSpaceSizeLocal());
+		}
+
+
+		private int randomSubSpaceSizeLocal() {
+			int old = this.classifier.subspaceSizeOption.getValue();
+			int randomSubSpaceSize;
+			do {
+				randomSubSpaceSize = this.classifier.classifierRandom.nextInt(maxValueRandom + 1 - minValueRandom) + minValueRandom;
+			} while (old == randomSubSpaceSize);
+			return randomSubSpaceSize;
+		}
+
+		public void trainOnInstance(Instance instance, double weight, long instancesSeen) {
+
+			Instance weightedInstance = instance.copy();
+			weightedInstance.setWeight(instance.weight() * weight);
+			this.classifier.trainOnInstance(weightedInstance);
+
+			boolean correctlyClassifies = this.classifier.correctlyClassifies(instance);
+			// Should it use a drift detector?  
+			if(this.useDriftDetector ) {
+				// Update the DRIFT detection method
+				this.driftDetectionMethod.input(correctlyClassifies ? 0 : 1);
+				// Check if there was a change
+				if(this.driftDetectionMethod.getChange()) {
+					this.numberOfDriftsDetected++;
+					this.reset();                    
+				}
+			}
+
+			this.updateMatrixConfusion(correctlyClassifies);
+		}
+
+		private void updateMatrixConfusion(boolean correctlyClassifies) {
+			if (this.windowObservationSize <= 0) return;
+
+			if (accWindow == null) {
+				accWindow = new boolean[this.windowObservationSize];
+				lastIndex = -1;
+				accSum = 0;
+				accCount = 0;
+			}
+
+			lastIndex = (lastIndex + 1) % this.windowObservationSize;
+
+			if (accCount == this.windowObservationSize) {
+				if (accWindow[lastIndex]) {
+					accSum--;
+				}
+			}
+
+			accWindow[lastIndex] = correctlyClassifies;
+			if (correctlyClassifies) {
+				accSum++;
+			}
+
+			if (accCount < this.windowObservationSize) {
+				accCount++;
+			}
+
+			accuracyWindowLearner = (double) accSum / accCount;
+		}
+
+
 		public double[] getVotesForInstance(Instance instance) {
-            DoubleVector vote = new DoubleVector(this.classifier.getVotesForInstance(instance));
-            return vote.getArrayRef();
-        }
+			DoubleVector vote = new DoubleVector(this.classifier.getVotesForInstance(instance));
+			return vote.getArrayRef();
+		}
 
-        @Override
-        public void getDescription(StringBuilder sb, int indent) {
-        }
-        
+		@Override
+		public void getDescription(StringBuilder sb, int indent) {
+		}
 
-    }
 
-    /***
-     * Inner class to assist with the multi-thread execution. 
-     */
-    protected class TrainingRunnable implements Runnable, Callable<Integer> {
-        final private ARTEBaseLearner learner;
-        final private Instance instance;
-        final private double weight;
-        final private long instancesSeen;
+	}
 
-        public TrainingRunnable(ARTEBaseLearner learner, Instance instance, 
-                double weight, long instancesSeen) {
-            this.learner = learner;
-            this.instance = instance;
-            this.weight = weight;
-            this.instancesSeen = instancesSeen;
-        }
+	/***
+	 * Inner class to assist with the multi-thread execution.
+	 */
+	protected class TrainingRunnable implements Runnable, Callable<Integer> {
+		final private ARTEBaseLearner learner;
+		final private Instance instance;
+		final private double weight;
+		final private long instancesSeen;
 
-        @Override
-        public void run() {
-            learner.trainOnInstance(this.instance, this.weight, this.instancesSeen);
-        }
+		public TrainingRunnable(ARTEBaseLearner learner, Instance instance,
+				double weight, long instancesSeen) {
+			this.learner = learner;
+			this.instance = instance;
+			this.weight = weight;
+			this.instancesSeen = instancesSeen;
+		}
 
-        @Override
-        public Integer call() {
-            run();
-            return 0;
-        }
-    }
-    
+		@Override
+		public void run() {
+			learner.trainOnInstance(this.instance, this.weight, this.instancesSeen);
+		}
+
+		@Override
+		public Integer call() {
+			run();
+			return 0;
+		}
+	}
+
 }
