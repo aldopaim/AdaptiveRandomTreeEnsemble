@@ -11,13 +11,13 @@ Download the pre-compiled jar files or import the project source code into [MOA]
 
 ## Citation
 ```
-@article{paim2025ARTE,
-  title = {Adaptive random tree ensemble for evolving data stream classification},
-  journal = {Knowledge-Based Systems},
-  volume = {309},
-  pages = {112830},
-  year = {2025},
-  issn = {0950-7051},
-  doi = {https://doi.org/10.1016/j.knosys.2024.112830}
+@article{paim2025adaptive,
+  title={Adaptive random tree ensemble for evolving data stream classification},
+  author={Paim, Aldo M and Enembreck, Fabr{\'\i}cio},
+  journal={Knowledge-Based Systems},
+  volume={309},
+  pages={112830},
+  year={2025},
+  publisher={Elsevier}
 }
 ```
