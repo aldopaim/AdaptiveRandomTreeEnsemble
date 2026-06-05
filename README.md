@@ -7,7 +7,7 @@ Data stream mining with concept drift is a significant challenge in machine lear
 
 ### Detection of Underutilized Classifiers
 
-The classifier selection mechanism was extended to identify **underutilized experts**, defined as base learners whose participation in the ensemble vote falls below 10% over the last *W* instances. Once flagged, these classifiers are signaled to the training layer for selective reinitialization, allowing the ensemble to recover capacity from dormant members rather than carrying them indefinitely.
+The classifier selection mechanism was extended to identify **underutilized classifiers**, defined as base learners whose participation in the ensemble vote falls below 10% over the last *W* instances. Once flagged, these classifiers are signaled to the training layer for selective reinitialization, allowing the ensemble to recover capacity from dormant members rather than carrying them indefinitely.
 
 ### Random Binary Splits for Nominal Attributes
 
